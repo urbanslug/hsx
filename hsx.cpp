@@ -4,12 +4,23 @@
 #include <fstream>
 #include <vector>
 #include <valarray>
+#include <utility>
 #include <math.h>
+#include <algorithm>
 
+#define MAX_FILES 255
 #define MAX_SEQUENCE 1000000
 #define MAX_HEADER 255
 #define HEADER_LENGTH 0x0000001C
 
+
+class HashTable {
+public:
+  HashTable() {}
+
+  void info() {}
+
+};
 
 class Hsx {
 
@@ -87,22 +98,48 @@ Notes:
  */
 
 public:
-  const uint32_t magic_number  = 0x957052D2; // little endian
-  const uint32_t version       = 0x00000100;
-  const uint32_t header_length = HEADER_LENGTH;
-  uint32_t number_of_files = 0;                 // FLEN
-  uint32_t file_table_offset = 0;               // FOFF
-  uint32_t number_of_buckets_in_hash_table = 0; // HLEN
-  uint32_t hash_table_offset = 0;               // HOFF
-  uint32_t number_of_sequences = 0;
-  uint32_t sequence_table_offset = 0;
+  const uint32_t magic_number    = 0x957052D2;    // Little endian. This implementation only supports little endian.
+  const uint32_t version         = 0x00000100;    // HSX Version number
+
+  // Header
+  // ------
+  const uint32_t header_length   = HEADER_LENGTH;
+  uint32_t number_of_files       = 0;             // FLEN
+  uint32_t file_table_offset     = 0x00000030;    // FOFF
+  uint32_t number_of_buckets     = 0;             // HLEN
+  uint32_t hash_table_offset     = 0;             // HOFF
+  uint32_t number_of_sequences   = 0;             // SLEN
+  uint32_t sequence_table_offset = 0;             // SOFF
+
+  uint32_t header_padding[4]     = {0};           // Padding
+
+  // File Table
+  // ----------
+  std::vector<uint32_t> file_table;               // FINFO_0 .. number of files
+  uint32_t file_table_padding = 0;                // Padding
+
+  // info records
+  // ------------
+  // pairs of FTYPE and FNAME _0 .. number of files
+  std::vector< std::pair<uint32_t, uint32_t> > info_records;
+  uint32_t info_padding = 0;                      // Padding
+
+  // SOFF table
+  // Sequence entries for hash buckets
+  // ---------------------------------
+  std::vector<uint32_t> sequence_entries;         // SOFF table
+  uint32_t soff_padding = 0;                      // Padding
+
+  // Hash table
+  // ----------
+  HashTable hash_table;
 
 
 
   Hsx(uint32_t num_of_files, uint32_t num_of_seqs, uint32_t num_buckets) :
-    number_of_sequences(num_of_seqs),
     number_of_files(num_of_files),
-    number_of_buckets_in_hash_table(num_buckets)
+    number_of_buckets(num_buckets),
+    number_of_sequences(num_of_seqs)
   {}
 
   void write_file(std::string output_filename) {
@@ -133,12 +170,62 @@ public:
   char sequence[MAX_SEQUENCE];
   int header_length;
   int sequence_length;
+  int header_offset;
+  int sequence_offset;
+  int file_number;
+  uint32_t short_hash = 98;
+  uint32_t long_hash;
+
 
   Fasta() {}
-  Fasta (std::string h, int h_len, std::string s, int s_len) :
-    header_length(h_len), sequence_length(s_len) {
+  Fasta (std::string h, int h_len, std::string s, int s_len, int h_offset, int s_offset, int f_num) :
+    header_length(h_len), sequence_length(s_len), header_offset(h_offset), sequence_offset(s_offset), file_number(f_num) {
+    long_hash = hassock_hash(h.c_str(), h_len);
     strcpy(header, h.c_str());
     strcpy(sequence, s.c_str());
+  }
+
+
+  uint32_t hassock_hash (const void* key, uint32_t len) {
+    const uint32_t seed = 0x5C3FC4D3;
+    const uint32_t m    = 0x87C10417;
+    const uint8_t* data = ((const uint8_t*) key) + len;
+    const uint8_t* stop = ((const uint8_t*) key) + 4;
+    uint32_t       h, k;
+
+    h = seed ^ len;
+    while (data >= stop)
+      {
+        k  = *(--data);
+        k |= *(--data) << 8;
+        k |= *(--data) << 16;
+        k |= *(--data) << 24;
+        k *= m;
+        k ^= k >> 24;
+        k *= m;
+        h *= m;
+        h ^= k;
+        len -= 4;
+      }
+    switch (len)
+      {
+      case 3: h ^= *(--data) << 16;
+      case 2: h ^= *(--data) << 8;
+      case 1: h ^= *(--data);
+        h *= m;
+      }
+    h ^= h >> 13;
+    h *= m;
+    h ^= h >> 15;
+    return h;
+  }
+
+  void set_hash(int num_buckets) {
+    short_hash = long_hash % num_buckets;
+  }
+
+  uint32_t get_hash() {
+    return short_hash;
   }
 
   void print() {
@@ -149,45 +236,34 @@ public:
       }
       std::cout << std::endl;
     }
+
+    std::cout << "Header length "   << header_length
+              << "\thash " << short_hash
+              << "\tsequence length " << sequence_length
+              << "\theader offset " << header_offset
+              << "\tsequence offset " << sequence_offset
+              << "\tfile number " << file_number
+              << "\tTotal "           << header_length + sequence_length
+              << std::endl;
   }
 };
 
-uint32_t hassock_hash (const void* key, uint32_t len) {
-  const uint32_t seed = 0x5C3FC4D3;
-  const uint32_t m    = 0x87C10417;
-  const uint8_t* data = ((const uint8_t*) key) + len;
-  const uint8_t* stop = ((const uint8_t*) key) + 4;
-  uint32_t       h, k;
+struct Seq {
+  uint32_t hash;
+  char     name[MAX_HEADER];
+  uint32_t length;
+  char     file_name[MAX_HEADER];
+  uint32_t file_num;
+  uint32_t offset;
+};
 
-  h = seed ^ len;
-  while (data >= stop)
-    {
-      k  = *(--data);
-      k |= *(--data) << 8;
-      k |= *(--data) << 16;
-      k |= *(--data) << 24;
-      k *= m;
-      k ^= k >> 24;
-      k *= m;
-      h *= m;
-      h ^= k;
-      len -= 4;
-    }
-  switch (len)
-    {
-    case 3: h ^= *(--data) << 16;
-    case 2: h ^= *(--data) << 8;
-    case 1: h ^= *(--data);
-      h *= m;
-    }
-  h ^= h >> 13;
-  h *= m;
-  h ^= h >> 15;
-  return h;
-}
-
-std::vector<Fasta> read_fasta_file(std::string fasta_file_path) {
+std::vector<Fasta> read_fasta_file(std::string fasta_file_path, size_t file_num) {
   std::vector<Fasta> sequences;
+
+  int line_offset = 0;
+  int header_offset = 0;
+  int sequence_offset = 0;
+  int counter = 0;
 
   std::string header;
   std::string seq;
@@ -199,21 +275,35 @@ std::vector<Fasta> read_fasta_file(std::string fasta_file_path) {
 
   if (myfile.is_open()) {
     while (getline(myfile, line)) {
+      line_offset = counter;
+      counter += line.size() + 1;
+
+      // Process a header
       if (line[0] == '>') {
         if (header != "") {
-          Fasta fasta(header, header.size(), seq, seq.size());
+          // if there was a header here previously
+          // save the current header and seq
+          Fasta fasta(header, header.size(), seq, seq.size(), header_offset, sequence_offset, file_num);
+
+          // clear the header and seq
           sequences.push_back(fasta);
           seq.clear();
           header.clear();
         }
+
+        sequence_offset = 0; // None in the python
+        header_offset = line_offset;
+        // set header to the current line
         header = line.substr(1, line.size());
       } else {
+        if (sequence_offset == 0) sequence_offset = line_offset;
         seq += line;
       }
     }
 
     // add the last one
-    Fasta fasta(header, header.size(), seq, seq.size());
+    if (sequence_offset == 0) sequence_offset = line_offset;
+    Fasta fasta(header, header.size(), seq, seq.size(), header_offset, sequence_offset, file_num);
     sequences.push_back(fasta);
 
     myfile.close();
@@ -234,7 +324,7 @@ int main() {
   }
 
   int file_count = filenames.size();
-  if (file_count > 255) {
+  if (file_count > MAX_FILES) {
     std::cerr << "Maximum number of files (255) exceeded" << std::endl;
     exit(EXIT_FAILURE);
   }
@@ -242,8 +332,9 @@ int main() {
   std::vector<Fasta> all_sequences;
 
   // collate sequences from all the files into a single vector
-  for (std::string f : filenames) {
-    std::vector<Fasta> f_sequences = read_fasta_file(f);
+  for (size_t i = 0; i < filenames.size(); i++) {
+    std::string f = filenames[i];
+    std::vector<Fasta> f_sequences = read_fasta_file(f, i);
 
     // preallocate memory, faster, to avoid constant re-allocation.
     std::vector<Fasta> temp;
@@ -261,12 +352,33 @@ int main() {
   // index is a 2D array
   int avg_bucket = 10;
   int num_buckets = floor((num_sequences+avg_bucket-1)/avg_bucket);
-  std::vector<std::vector<Fasta> > index(HEADER_LENGTH, std::vector<Fasta>());
-  for (Fasta i : all_sequences ) {
-    uint32_t bucket = hassock_hash(i.header,i.header_length) % num_buckets;
-    index[bucket].push_back(i);
+  std::vector<std::vector<Seq> > index(HEADER_LENGTH, std::vector<Seq>());
+  for (auto i =  all_sequences.begin(); i !=  all_sequences.end(); i++) {
+    i->set_hash(num_buckets);
+    uint32_t bucket = i->get_hash();
+
+    Seq s;
+    s.hash = i->get_hash();
+    strcpy(s.name, &i->header[0]);
+    s.length = i->sequence_length;
+    // file name
+    s.file_num = i->file_number;
+    s.offset = i->header_offset;
+
+    index[bucket].push_back(s);
   }
 
+  // TODO: add the hash table
+  // TODO: sort the index alphabetically
+
+  for (auto bucket: index) {
+    for (auto s: bucket) {
+      std::cout << s.hash <<" " << s.name <<  " " << s.offset << std::endl;
+    }
+  }
+
+  // TODO: DEBUG: Buckets
+  /*
   for(auto i = 0; i < HEADER_LENGTH; i++) {
     std::vector<Fasta> bucket = index[i];
     if (!bucket.empty()) {
@@ -276,12 +388,15 @@ int main() {
       }
     }
   }
-
+  */
 
   Hsx obj(file_count, num_sequences, num_buckets);
+  // obj.info();
+
+  /*
   obj.write_file("/home/sluggie/src/learning/C++/misc/out.hsx");
   obj.read_file("/home/sluggie/src/learning/C++/misc/out.hsx");
-
+  */
 
   return 0;
 }
