@@ -1,3 +1,6 @@
+/*
+ HSX Hashed Sequence Index
+ */
 #include <iostream>
 #include <string>
 #include <string.h>
@@ -7,23 +10,35 @@
 #include <utility>
 #include <math.h>
 #include <algorithm>
+#include <set>
+
+#include <filesystem> // TODO: remove C++ 17 features
 
 #define MAX_FILES 255
 #define MAX_SEQUENCE 1000000
 #define MAX_HEADER 255
 #define HEADER_LENGTH 0x0000001C
+#define MAX_STRING 255
 
+// Structs and classes
+// -------------------
+struct Seq {
+  uint32_t hash;
+  char     name[MAX_HEADER];
+  uint32_t length;
+  char     file_name[MAX_HEADER];
+  uint32_t file_num;
+  uint32_t offset;
+};
 
-class HashTable {
-public:
-  HashTable() {}
-
-  void info() {}
-
+struct Short_Seq {
+  uint32_t length;
+  uint32_t file_num;
+  uint32_t offset;
+  char     name[MAX_HEADER];
 };
 
 class Hsx {
-
 /*
 "Hashed sequence index" (hsx) file reader (for a fasta file)
 -------------------------------------------------------------------
@@ -101,8 +116,9 @@ public:
   const uint32_t magic_number    = 0x957052D2;    // Little endian. This implementation only supports little endian.
   const uint32_t version         = 0x00000100;    // HSX Version number
 
-  // Header
-  // ------
+  /*
+    Header
+   */
   const uint32_t header_length   = HEADER_LENGTH;
   uint32_t number_of_files       = 0;             // FLEN
   uint32_t file_table_offset     = 0x00000030;    // FOFF
@@ -113,55 +129,147 @@ public:
 
   uint32_t header_padding[4]     = {0};           // Padding
 
-  // File Table
-  // ----------
+  /*
+    FINFO File table
+    It holds offsets into the FTYPE Table
+   */
   std::vector<uint32_t> file_table;               // FINFO_0 .. number of files
   uint32_t file_table_padding = 0;                // Padding
 
-  // info records
-  // ------------
-  // pairs of FTYPE and FNAME _0 .. number of files
-  std::vector< std::pair<uint32_t, uint32_t> > info_records;
+  /*
+    FTYPE & FNAME file information records
+    Contigous records of the the file extension (FTYPE) and base name (FNAME)
+    from 0 .. number of files
+   */
+  std::vector<std::string > file_information_records;
   uint32_t info_padding = 0;                      // Padding
 
-  // SOFF table
-  // Sequence entries for hash buckets
-  // ---------------------------------
-  std::vector<uint32_t> sequence_entries;         // SOFF table
+  /*
+    SOFF Hash table/sequence offsets
+
+    Buckets hold offsets from the file start to the sequence index array
+    The hash table provides direct access to the sequence index array
+   */
+  std::vector<size_t> hash_table;
+  uint32_t hash_table_padding = 0;
+
+  /*
+    IXLEN Length (in nucleotides) of the sequence
+    IXFILE index into the file table (FINFO) for the file containing the sequence
+    IXOFF  offset (from the start of the appropriate sequence file) pointing to the sequence.
+    IXNAME name of the sequence ...
+
+    Sequence index
+   */
+  std::vector<Short_Seq> sequence_index_array;         // SOFF table
   uint32_t soff_padding = 0;                      // Padding
 
-  // Hash table
-  // ----------
-  HashTable hash_table;
-
-
-
-  Hsx(uint32_t num_of_files, uint32_t num_of_seqs, uint32_t num_buckets) :
+  Hsx(uint32_t num_of_files, uint32_t num_of_seqs, uint32_t num_buckets, std::vector<std::string> file_info_records, std::vector<Seq> index) :
     number_of_files(num_of_files),
     number_of_buckets(num_buckets),
-    number_of_sequences(num_of_seqs)
-  {}
+    number_of_sequences(num_of_seqs),
+    file_information_records(file_info_records)
+  {
+
+    std::vector<Short_Seq> short_index;
+    for (auto p: index) {
+      Short_Seq foo;
+      foo.length = p.length;
+      foo.file_num = p.file_num;
+      foo.offset = p.offset;
+      strcpy(foo.name, p.name);
+
+      short_index.push_back(foo);
+    }
+
+    sequence_index_array = short_index;
+
+    // Compute offsets
+    size_t file_start = 0;
+    size_t constants_end = file_start + sizeof(magic_number) + sizeof(version);
+
+    size_t header_end = constants_end + header_length + sizeof(header_padding);
+
+    file_table_offset = header_end; // FOFF
+
+    // TODO: check that this number is divisible by two
+    uint32_t file_table_len = file_information_records.size()/2;
+    file_table.reserve(file_table_len);
+
+    size_t file_table_end = sizeof(file_table) + sizeof(file_table_padding);
+
+    // populate the file table
+    uint32_t bar = 2; // the length of a file info record
+    int y = file_table_end;
+    for (size_t i = 0; i+bar < file_information_records.size(); i += bar) {
+      file_table.push_back(sizeof(std::string)*bar + y);
+      y += sizeof(std::string)*bar;
+    }
+
+    size_t info_records_end = file_table_end + sizeof(file_information_records);
+
+    hash_table_offset = info_records_end + info_padding; // HOFF
+
+    std::vector<size_t> bucket_offsets; // offsets within the sequence index array
+    int current_bucket, previous_bucket = 0;
+    for (size_t i = 0; i < number_of_sequences; i++) {
+      current_bucket = index[i].hash;
+      if (current_bucket != previous_bucket) {
+        bucket_offsets.push_back(i+1);
+        previous_bucket = current_bucket;
+      }
+    }
+
+    hash_table.reserve(number_of_buckets);
+    size_t hash_table_end = hash_table_offset + sizeof(hash_table_padding);
+
+    for (auto bucket_offset : bucket_offsets) {
+      hash_table.push_back(sizeof(Seq)*bucket_offset + hash_table_end);
+    }
+
+    sequence_table_offset = hash_table_end; // SOFF
+
+
+  }
 
   void write_file(std::string output_filename) {
-    std::ofstream f(output_filename, std::ios::binary | std::ios::app);
+    std::ofstream f(output_filename, std::ios::binary | std::ios::out);
     f.write((char*)this, sizeof(*this));
     f.close();
   }
 
-  void info() {
-    std::cout << "Number of files:\t"       << number_of_files
-              << "\nNumber of sequences:\t" << number_of_sequences
-              << std::endl;
-  }
-
   void read_file(std::string input_filename) {
     std::ifstream f(input_filename, std::ios::binary | std::ios::in);
-    while (f.read((char*)this, sizeof(this))) {
+    while (f.read((char*)this, sizeof(*this))) {
       this->info();
     }
     f.close();
   }
 
+
+  void info() {
+    // Header
+    std::cout << "Number of files:\t"       << number_of_files
+              << "\nNumber of sequences:\t" << number_of_sequences
+              << std::endl;
+    std::cout << "-----------------------------------------\n";
+    // file information
+    std::cout << "File information records" << std::endl;
+    for (auto r : file_information_records) {
+      std::cout << r << std::endl;
+    }
+    std::cout << "-----------------------------------------\n";
+
+    // Hash table
+
+    // Sequence index
+    for (auto s: sequence_index_array) {
+      std::cout << s.length   << "\t"
+                << s.file_num << "\t"
+                << s.offset   << "\t"
+                << s.name     << std::endl;
+    }
+  }
 };
 
 class Fasta {
@@ -179,7 +287,12 @@ public:
 
   Fasta() {}
   Fasta (std::string h, int h_len, std::string s, int s_len, int h_offset, int s_offset, int f_num) :
-    header_length(h_len), sequence_length(s_len), header_offset(h_offset), sequence_offset(s_offset), file_number(f_num) {
+    header_length(h_len),
+    sequence_length(s_len),
+    header_offset(h_offset),
+    sequence_offset(s_offset),
+    file_number(f_num)
+  {
     long_hash = hassock_hash(h.c_str(), h_len);
     strcpy(header, h.c_str());
     strcpy(sequence, s.c_str());
@@ -237,26 +350,20 @@ public:
       std::cout << std::endl;
     }
 
-    std::cout << "Header length "   << header_length
-              << "\thash " << short_hash
+    std::cout << "Header length "     << header_length
+              << "\thash "            << short_hash
               << "\tsequence length " << sequence_length
-              << "\theader offset " << header_offset
+              << "\theader offset "   << header_offset
               << "\tsequence offset " << sequence_offset
-              << "\tfile number " << file_number
+              << "\tfile number "     << file_number
               << "\tTotal "           << header_length + sequence_length
               << std::endl;
   }
 };
 
-struct Seq {
-  uint32_t hash;
-  char     name[MAX_HEADER];
-  uint32_t length;
-  char     file_name[MAX_HEADER];
-  uint32_t file_num;
-  uint32_t offset;
-};
-
+/*
+ Parse a fasta file...
+ */
 std::vector<Fasta> read_fasta_file(std::string fasta_file_path, size_t file_num) {
   std::vector<Fasta> sequences;
 
@@ -315,6 +422,22 @@ std::vector<Fasta> read_fasta_file(std::string fasta_file_path, size_t file_num)
   return sequences;
 }
 
+/*
+  Sort Seqs in ascending order of the buckets they are in and
+  also sort them lexicographically within those buckets.
+
+  Sort based on the hash.
+  If hashes are equal, sort based on the lexicographic order of thier names.
+ */
+bool sorter (Seq i, Seq j) {
+  if (i.hash == j.hash) {
+    return std::string(i.name) < std::string(j.name);
+  } else {
+    return i.hash < j.hash;
+  }
+}
+
+
 int main() {
   std::string filename;
   std::vector<std::string> filenames;
@@ -323,10 +446,40 @@ int main() {
     filenames.push_back(filename);
   }
 
+  // Check for max files
   int file_count = filenames.size();
   if (file_count > MAX_FILES) {
     std::cerr << "Maximum number of files (255) exceeded" << std::endl;
     exit(EXIT_FAILURE);
+  }
+
+  // Generate the file information records
+  std::set<std::string> seen_filenames;
+  std::vector<std::string> file_information_records;
+  for (auto filename : filenames) {
+
+    // Ensure there are no duplicate filenames
+    if (seen_filenames.find(filename) != seen_filenames.end()) {
+      std::cerr << "Hsx does not support two files with the same filename but duplicate filename found "
+                << filename << std::endl;
+      exit(EXIT_FAILURE);
+    }
+    seen_filenames.insert(filename);
+
+    // TODO: make backwards compatible stop using std::filesystem
+    std::filesystem::path p (filename);
+    std::string dot_ext = p.extension();
+    std::string ext = dot_ext.substr(1, dot_ext.size());
+    std::string base_name = p.stem();
+
+    // TODO: check that extension is fasta or fa
+    if (false) {
+      std::cerr << "Hsx only support fasta or fa extensions" << std::endl;
+      exit(EXIT_FAILURE);
+    }
+
+    file_information_records.push_back(ext);
+    file_information_records.push_back(base_name);
   }
 
   std::vector<Fasta> all_sequences;
@@ -347,56 +500,32 @@ int main() {
   }
 
   int num_sequences = all_sequences.size();
-
-  // std::vector<Fasta> index(HEADER_LENGTH, Fasta());
-  // index is a 2D array
-  int avg_bucket = 10;
+  int avg_bucket = 10; // TODO: move this upwards?
   int num_buckets = floor((num_sequences+avg_bucket-1)/avg_bucket);
-  std::vector<std::vector<Seq> > index(HEADER_LENGTH, std::vector<Seq>());
+
+  // Generate the sequence index from the Fasta objects (all_sequences)
+  // The sequence index is an array of Seqs
+  std::vector<Seq> index;
+  index.reserve(num_sequences);
   for (auto i =  all_sequences.begin(); i !=  all_sequences.end(); i++) {
     i->set_hash(num_buckets);
-    uint32_t bucket = i->get_hash();
 
     Seq s;
     s.hash = i->get_hash();
     strcpy(s.name, &i->header[0]);
     s.length = i->sequence_length;
-    // file name
     s.file_num = i->file_number;
     s.offset = i->header_offset;
-
-    index[bucket].push_back(s);
+    index.push_back(s);
   }
 
-  // TODO: add the hash table
-  // TODO: sort the index alphabetically
+  // sort index
+  std::sort(index.begin(), index.end(), sorter);
 
-  for (auto bucket: index) {
-    for (auto s: bucket) {
-      std::cout << s.hash <<" " << s.name <<  " " << s.offset << std::endl;
-    }
-  }
+  Hsx obj(file_count, num_sequences, num_buckets, file_information_records, index);
 
-  // TODO: DEBUG: Buckets
-  /*
-  for(auto i = 0; i < HEADER_LENGTH; i++) {
-    std::vector<Fasta> bucket = index[i];
-    if (!bucket.empty()) {
-      std::cout << i << std::endl;
-      for (auto e : bucket) {
-        std::cout << e.header << " " << std::endl;
-      }
-    }
-  }
-  */
-
-  Hsx obj(file_count, num_sequences, num_buckets);
-  // obj.info();
-
-  /*
-  obj.write_file("/home/sluggie/src/learning/C++/misc/out.hsx");
-  obj.read_file("/home/sluggie/src/learning/C++/misc/out.hsx");
-  */
+  obj.write_file("/home/sluggie/src/bio/hsx/out.hsx");
+  obj.read_file("/home/sluggie/src/bio/hsx/out.hsx");
 
   return 0;
 }
