@@ -17,7 +17,7 @@
 #define MAX_FILES 255
 #define MAX_SEQUENCE 1000000
 #define MAX_HEADER 255
-#define HEADER_LENGTH 0x0000001C
+// #define HEADER_LENGTH 0x0000001C
 #define MAX_STRING 255
 
 // Structs and classes
@@ -36,6 +36,13 @@ struct Short_Seq {
   uint32_t file_num;
   uint32_t offset;
   char     name[MAX_HEADER];
+};
+
+struct FileInfoRecord {
+  char     name[MAX_HEADER];
+  uint32_t name_length;
+  char     ext[MAX_HEADER];
+  uint32_t ext_length;
 };
 
 class Hsx {
@@ -113,13 +120,12 @@ Notes:
  */
 
 public:
-  const uint32_t magic_number    = 0x957052D2;    // Little endian. This implementation only supports little endian.
-  const uint32_t version         = 0x00000100;    // HSX Version number
-
   /*
     Header
-   */
-  const uint32_t header_length   = HEADER_LENGTH;
+  */
+  const uint32_t magic_number    = 0x957052D2;    // Little endian. This implementation only supports little endian.
+  const uint32_t version         = 0x00000100;    // HSX Version number
+  uint32_t header_length         = 0;
   uint32_t number_of_files       = 0;             // FLEN
   uint32_t file_table_offset     = 0x00000030;    // FOFF
   uint32_t number_of_buckets     = 0;             // HLEN
@@ -141,8 +147,8 @@ public:
     Contigous records of the the file extension (FTYPE) and base name (FNAME)
     from 0 .. number of files
    */
-  std::vector<std::string > file_information_records;
-  uint32_t info_padding = 0;                      // Padding
+  std::vector<std::string> file_information_records;
+  uint32_t file_information_records_padding = 0;                      // Padding
 
   /*
     SOFF Hash table/sequence offsets
@@ -171,6 +177,54 @@ public:
     file_information_records(file_info_records)
   {
 
+    // ----------------------------------------------
+    //     Header
+    // ----------------------------------------------
+
+    uint32_t file_start = 0;
+    uint32_t constants_end = file_start + sizeof(magic_number) + sizeof(version);
+
+    uint32_t header_length = constants_end + sizeof(header_length) + sizeof(number_of_files)
+      + sizeof(file_table_offset) + sizeof(number_of_buckets)
+      + sizeof (hash_table_offset) + sizeof(number_of_sequences)
+      + sizeof(sequence_table_offset);
+
+    uint32_t header_end =  header_length + sizeof(header_padding);
+
+    // TODO: remove
+    std::cout << "header end " << header_end << std::endl; // => 52
+
+    file_table_offset = header_end; // set FOFF
+
+    // ----------------------------------------------
+    //     FINFO
+    // ----------------------------------------------
+
+    file_table.reserve(number_of_files);
+    uint32_t file_table_size = sizeof(uint32_t)*number_of_files;
+    size_t file_table_end = file_table_size + sizeof(file_table_padding) + header_end;
+
+    std::cout << "file table end " << file_table_end << std::endl;
+
+    /*
+    // populate the file table (FINFO)
+    uint32_t bar = 2; // the length of a file info record
+    int y = file_table_end;
+    for (size_t i = 0; i+bar < file_information_records.size(); i += bar) {
+      file_table.push_back(sizeof(std::string)*bar + y);
+      y += sizeof(std::string)*bar;
+    }
+    */
+    // ----------------------------------------------
+    //     FYPE and FNAME
+    // ----------------------------------------------
+
+    size_t info_records_end = file_table_end + sizeof(file_information_records_padding);
+
+    // ----------------------------------------------
+    //     FYPE and FNAME
+    // ----------------------------------------------
+
     std::vector<Short_Seq> short_index;
     for (auto p: index) {
       Short_Seq foo;
@@ -184,31 +238,8 @@ public:
 
     sequence_index_array = short_index;
 
-    // Compute offsets
-    size_t file_start = 0;
-    size_t constants_end = file_start + sizeof(magic_number) + sizeof(version);
 
-    size_t header_end = constants_end + header_length + sizeof(header_padding);
-
-    file_table_offset = header_end; // FOFF
-
-    // TODO: check that this number is divisible by two
-    uint32_t file_table_len = file_information_records.size()/2;
-    file_table.reserve(file_table_len);
-
-    size_t file_table_end = sizeof(file_table) + sizeof(file_table_padding);
-
-    // populate the file table
-    uint32_t bar = 2; // the length of a file info record
-    int y = file_table_end;
-    for (size_t i = 0; i+bar < file_information_records.size(); i += bar) {
-      file_table.push_back(sizeof(std::string)*bar + y);
-      y += sizeof(std::string)*bar;
-    }
-
-    size_t info_records_end = file_table_end + sizeof(file_information_records);
-
-    hash_table_offset = info_records_end + info_padding; // HOFF
+    hash_table_offset = info_records_end + file_information_records_padding; // HOFF
 
     std::vector<size_t> bucket_offsets; // offsets within the sequence index array
     int current_bucket, previous_bucket = 0;
@@ -234,7 +265,34 @@ public:
 
   void write_file(std::string output_filename) {
     std::ofstream f(output_filename, std::ios::binary | std::ios::out);
-    f.write((char*)this, sizeof(*this));
+    // f.write((char*)this, sizeof(*this));
+
+    // Write header
+    f.write((char*)&magic_number, sizeof(magic_number));
+    f.write((char*)&version, sizeof(version));
+    f.write((char*)&header_length, sizeof(header_length));
+    f.write((char*)&number_of_files, sizeof(number_of_files));
+    f.write((char*)&file_table_offset, sizeof(file_table_offset));
+    f.write((char*)&number_of_buckets, sizeof(number_of_buckets));
+    f.write((char*)&hash_table_offset, sizeof(hash_table_offset));
+    f.write((char*)&number_of_sequences, sizeof(number_of_sequences));
+    f.write((char*)&sequence_table_offset, sizeof(sequence_table_offset));
+
+    f.write((char*)&header_padding, sizeof(header_padding));
+
+    // -------
+    // if empty, this writes nothing
+    for (auto it = file_table.begin(); it != file_table.end(); it++) {
+      f.write((char*)&(*it), sizeof(*it));
+    }
+    f.write((char*)&file_table_padding, sizeof(file_table_padding));
+
+    // -------
+    for (auto &k : file_information_records) {
+      f.write(k.data(), k.size());
+    }
+    f.write((char*)&file_information_records_padding, sizeof(file_information_records_padding));
+
     f.close();
   }
 
@@ -245,7 +303,6 @@ public:
     }
     f.close();
   }
-
 
   void info() {
     // Header
