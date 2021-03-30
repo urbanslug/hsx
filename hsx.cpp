@@ -1,5 +1,7 @@
 /*
  HSX Hashed Sequence Index
+ Spec: http://www.bx.psu.edu/miller_lab/dist/README.lastz-1.02.00/hsx_format.html
+ Lastz documentation http://www.bx.psu.edu/~rsharris/lastz/README.lastz-1.04.03.html#fmt_hsx
  */
 #include <iostream>
 #include <string>
@@ -14,35 +16,30 @@
 
 #include <filesystem> // TODO: remove C++ 17 features
 
+#define MAGIC_BIG 0xD2527095
+#define HSX_VERSION 0x00000100
+#define HEADER_LENGTH 0x0000001C
+
 #define MAX_FILES 255
 #define MAX_SEQUENCE 1000000
 #define MAX_HEADER 255
-// #define HEADER_LENGTH 0x0000001C
-#define MAX_STRING 255
+
 
 // Structs and classes
 // -------------------
 struct Seq {
   uint32_t hash;
-  char     name[MAX_HEADER];
+  std::string name;
   uint32_t length;
-  char     file_name[MAX_HEADER];
   uint32_t file_num;
   uint32_t offset;
 };
 
 struct Short_Seq {
-  uint32_t length;
-  uint32_t file_num;
-  uint32_t offset;
-  char     name[MAX_HEADER];
-};
-
-struct FileInfoRecord {
-  char     name[MAX_HEADER];
-  uint32_t name_length;
-  char     ext[MAX_HEADER];
-  uint32_t ext_length;
+  uint32_t    length;
+  uint32_t    file_num;
+  uint32_t    offset;
+  std::string name;
 };
 
 class Hsx {
@@ -123,9 +120,9 @@ public:
   /*
     Header
   */
-  const uint32_t magic_number    = 0x957052D2;    // Little endian. This implementation only supports little endian.
-  const uint32_t version         = 0x00000100;    // HSX Version number
-  uint32_t header_length         = 0;
+  const uint32_t magic_number    = MAGIC_BIG;     // Big endian
+  const uint32_t version         = HSX_VERSION;   // HSX version number
+  const uint32_t header_length   = HEADER_LENGTH;
   uint32_t number_of_files       = 0;             // FLEN
   uint32_t file_table_offset     = 0x00000030;    // FOFF
   uint32_t number_of_buckets     = 0;             // HLEN
@@ -156,11 +153,11 @@ public:
     Buckets hold offsets from the file start to the sequence index array
     The hash table provides direct access to the sequence index array
    */
-  std::vector<size_t> hash_table;
+  std::vector<uint32_t> hash_table;
   uint32_t hash_table_padding = 0;
 
   /*
-    IXLEN Length (in nucleotides) of the sequence
+    IXLEN  Length (in nucleotides) of the sequence
     IXFILE index into the file table (FINFO) for the file containing the sequence
     IXOFF  offset (from the start of the appropriate sequence file) pointing to the sequence.
     IXNAME name of the sequence ...
@@ -170,7 +167,8 @@ public:
   std::vector<Short_Seq> sequence_index_array;         // SOFF table
   uint32_t soff_padding = 0;                      // Padding
 
-  Hsx(uint32_t num_of_files, uint32_t num_of_seqs, uint32_t num_buckets, std::vector<std::string> file_info_records, std::vector<Seq> index) :
+  Hsx(uint32_t num_of_files, uint32_t num_of_seqs, uint32_t num_buckets,
+      std::vector<std::string> file_info_records, std::vector<Seq> index) :
     number_of_files(num_of_files),
     number_of_buckets(num_buckets),
     number_of_sequences(num_of_seqs),
@@ -184,12 +182,14 @@ public:
     uint32_t file_start = 0;
     uint32_t constants_end = file_start + sizeof(magic_number) + sizeof(version);
 
-    uint32_t header_length = constants_end + sizeof(header_length) + sizeof(number_of_files)
+    uint32_t th = constants_end + sizeof(header_length) + sizeof(number_of_files)
       + sizeof(file_table_offset) + sizeof(number_of_buckets)
       + sizeof (hash_table_offset) + sizeof(number_of_sequences)
       + sizeof(sequence_table_offset);
 
-    uint32_t header_end =  header_length + sizeof(header_padding);
+    //std::cout << header_length << "\n";
+
+    uint32_t header_end = th + sizeof(header_padding);
 
     // TODO: remove
     std::cout << "header end " << header_end << std::endl; // => 52
@@ -202,65 +202,99 @@ public:
 
     file_table.reserve(number_of_files);
     uint32_t file_table_size = sizeof(uint32_t)*number_of_files;
-    size_t file_table_end = file_table_size + sizeof(file_table_padding) + header_end;
+    uint32_t file_table_end = file_table_size + sizeof(file_table_padding) + header_end;
+
+    // populate the file table (FINFO)
+    uint32_t info_record_offsets = file_table_end;
+    uint32_t step = 2;
+    uint32_t inc = 1;
+    for (auto i = 0; i+inc < file_information_records.size(); i += step) {
+      file_table.push_back(info_record_offsets);
+      info_record_offsets += file_information_records[i].size() + file_information_records[i+inc].size();
+    }
 
     std::cout << "file table end " << file_table_end << std::endl;
 
-    /*
-    // populate the file table (FINFO)
-    uint32_t bar = 2; // the length of a file info record
-    int y = file_table_end;
-    for (size_t i = 0; i+bar < file_information_records.size(); i += bar) {
-      file_table.push_back(sizeof(std::string)*bar + y);
-      y += sizeof(std::string)*bar;
+    // ----------------------------------------------
+    //     FYPE and FNAME
+    // ----------------------------------------------
+
+    // the length of the data held by information records
+    // each char is a byte
+    int total_string_length = 0;
+    for (auto &s: file_information_records) {
+      total_string_length += s.size();
     }
-    */
-    // ----------------------------------------------
-    //     FYPE and FNAME
-    // ----------------------------------------------
 
-    size_t info_records_end = file_table_end + sizeof(file_information_records_padding);
+    size_t info_records_end = file_table_end + total_string_length + sizeof(file_information_records_padding);
+
+    std::cout << "info records end " << info_records_end << std::endl;
 
     // ----------------------------------------------
-    //     FYPE and FNAME
+    //     SOFF
     // ----------------------------------------------
+    hash_table_offset = info_records_end; // set HOFF
+    hash_table.reserve(number_of_buckets+1);
 
+
+    // TODO: check that number_of_buckets == hash_table.size()
+
+    size_t hash_table_end = info_records_end
+      + (number_of_buckets+1)*sizeof(uint32_t) // the number of elements in the hash table * size of each element
+      + sizeof(hash_table_padding);
+
+    std::cout << "hash table end " << hash_table_end << std::endl;
+
+    // ----------------------------------------------
+    //     IXLEN, IXFILE, IXOFF, & IXNAME
+    // ----------------------------------------------
+    sequence_table_offset = hash_table_end; // set SOFF
+
+    std::vector<std::pair<uint32_t, uint32_t>> member_sizes; // bucket and size
+    uint32_t acc = 0;
     std::vector<Short_Seq> short_index;
     for (auto p: index) {
       Short_Seq foo;
-      foo.length = p.length;
+      foo.length   = p.length;
       foo.file_num = p.file_num;
-      foo.offset = p.offset;
-      strcpy(foo.name, p.name);
+      foo.offset   = p.offset;
+      foo.name     = std::string(p.name);
 
       short_index.push_back(foo);
+
+     uint32_t sz = sizeof(foo.length) + sizeof(foo.file_num) + sizeof(foo.offset) + foo.name.size();
+     acc += sz;
+     member_sizes.push_back(std::make_pair(p.hash, sz));
     }
 
     sequence_index_array = short_index;
 
+    // ---------------------------
 
-    hash_table_offset = info_records_end + file_information_records_padding; // HOFF
+    // Populate the hash table that provides direct access to the sequence index
 
-    std::vector<size_t> bucket_offsets; // offsets within the sequence index array
-    int current_bucket, previous_bucket = 0;
-    for (size_t i = 0; i < number_of_sequences; i++) {
-      current_bucket = index[i].hash;
-      if (current_bucket != previous_bucket) {
-        bucket_offsets.push_back(i+1);
-        previous_bucket = current_bucket;
+    std::vector<uint32_t> l (number_of_buckets, 0);
+    for (auto &m : member_sizes) {
+      l[m.first] += m.second;
+    }
+
+    uint32_t start = sequence_table_offset;
+    for (auto &sz : l) {
+      hash_table.push_back(start);
+      start += sz;
+      if (sz == 0) {
+        // set the most significant bit to 1
       }
     }
 
-    hash_table.reserve(number_of_buckets);
-    size_t hash_table_end = hash_table_offset + sizeof(hash_table_padding);
+    // set the sentinel bucket
+    hash_table.push_back(sequence_table_offset + acc);
 
-    for (auto bucket_offset : bucket_offsets) {
-      hash_table.push_back(sizeof(Seq)*bucket_offset + hash_table_end);
-    }
-
-    sequence_table_offset = hash_table_end; // SOFF
-
-
+    // TODO: remove this debug print statement
+    std::cout << "number of buckets " << number_of_buckets
+              << " hash table size " << hash_table.size()
+              << " sentinel " << sequence_table_offset + acc
+              << std::endl;
   }
 
   void write_file(std::string output_filename) {
@@ -281,9 +315,8 @@ public:
     f.write((char*)&header_padding, sizeof(header_padding));
 
     // -------
-    // if empty, this writes nothing
-    for (auto it = file_table.begin(); it != file_table.end(); it++) {
-      f.write((char*)&(*it), sizeof(*it));
+    for (auto &i : file_table) {
+      f.write((char*)&i, sizeof(i));
     }
     f.write((char*)&file_table_padding, sizeof(file_table_padding));
 
@@ -292,6 +325,21 @@ public:
       f.write(k.data(), k.size());
     }
     f.write((char*)&file_information_records_padding, sizeof(file_information_records_padding));
+
+    // --- hash table ---
+    for (auto &i : hash_table) {
+      f.write((char*)&i, sizeof(i));
+    }
+    f.write((char*)&hash_table_padding, sizeof(hash_table_padding));
+
+    // --- sequence index -----
+    for (auto &i : sequence_index_array) {
+
+      f.write((char*)&i.length,   sizeof(i.length));
+      f.write((char*)&i.file_num, sizeof(i.file_num));
+      f.write((char*)&i.offset,   sizeof(i.offset));
+      f.write(i.name.data(),      i.name.size());
+    }
 
     f.close();
   }
@@ -331,8 +379,8 @@ public:
 
 class Fasta {
 public:
-  char header[MAX_HEADER];
-  char sequence[MAX_SEQUENCE];
+  std::string header;
+  std::string sequence;
   int header_length;
   int sequence_length;
   int header_offset;
@@ -344,6 +392,8 @@ public:
 
   Fasta() {}
   Fasta (std::string h, int h_len, std::string s, int s_len, int h_offset, int s_offset, int f_num) :
+    header(h),
+    sequence(s),
     header_length(h_len),
     sequence_length(s_len),
     header_offset(h_offset),
@@ -351,8 +401,6 @@ public:
     file_number(f_num)
   {
     long_hash = hassock_hash(h.c_str(), h_len);
-    strcpy(header, h.c_str());
-    strcpy(sequence, s.c_str());
   }
 
 
@@ -569,7 +617,7 @@ int main() {
 
     Seq s;
     s.hash = i->get_hash();
-    strcpy(s.name, &i->header[0]);
+    s.name = std::string(i->header);
     s.length = i->sequence_length;
     s.file_num = i->file_number;
     s.offset = i->header_offset;
@@ -582,7 +630,7 @@ int main() {
   Hsx obj(file_count, num_sequences, num_buckets, file_information_records, index);
 
   obj.write_file("/home/sluggie/src/bio/hsx/out.hsx");
-  obj.read_file("/home/sluggie/src/bio/hsx/out.hsx");
+  //obj.read_file("/home/sluggie/src/bio/hsx/out.hsx");
 
   return 0;
 }
