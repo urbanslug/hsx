@@ -17,8 +17,9 @@
 #include <filesystem> // TODO: remove C++ 17 features
 
 #define MAGIC_BIG 0xD2527095
-#define HSX_VERSION 0x00000100
-#define HEADER_LENGTH 0x0000001C
+#define MAGIC_SMALL 0x957052D2
+#define HSX_VERSION 0x00010000
+#define HEADER_LENGTH 0x1C000000
 
 #define MAX_FILES 255
 #define MAX_SEQUENCE 1000000
@@ -36,11 +37,52 @@ struct Seq {
 };
 
 struct Short_Seq {
-  uint32_t    length;
-  uint32_t    file_num;
-  uint32_t    offset;
+  uint64_t    length;
+  uint8_t    file_num;
+  uint64_t    offset;
   std::string name;
 };
+
+
+template<typename Char>
+Char *uint64_6_to_be(std::uint64_t src, Char *dest) {
+  static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
+  dest[0] = static_cast<Char>(static_cast<std::uint8_t>(src >> 56));
+  dest[1] = static_cast<Char>(static_cast<std::uint8_t>(src >> 48));
+  dest[2] = static_cast<Char>(static_cast<std::uint8_t>(src >> 40));
+  dest[3] = static_cast<Char>(static_cast<std::uint8_t>(src >> 32));
+  dest[4] = static_cast<Char>(static_cast<std::uint8_t>(src >> 24));
+  dest[5] = static_cast<Char>(static_cast<std::uint8_t>(src >> 16));
+  //dest[6] = static_cast<Char>(static_cast<std::uint8_t>(src >> 8));
+  //dest[7] = static_cast<Char>(static_cast<std::uint8_t>(src));
+  return dest;
+}
+
+template<typename Char>
+Char *uint64_5_to_be(std::uint64_t src, Char *dest) {
+  static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
+  dest[0] = static_cast<Char>(static_cast<std::uint8_t>(src >> 56));
+  dest[1] = static_cast<Char>(static_cast<std::uint8_t>(src >> 48));
+  dest[2] = static_cast<Char>(static_cast<std::uint8_t>(src >> 40));
+  dest[3] = static_cast<Char>(static_cast<std::uint8_t>(src >> 32));
+  dest[4] = static_cast<Char>(static_cast<std::uint8_t>(src >> 24));
+  //dest[5] = static_cast<Char>(static_cast<std::uint8_t>(src >> 16));
+  //dest[6] = static_cast<Char>(static_cast<std::uint8_t>(src >> 8));
+  //dest[7] = static_cast<Char>(static_cast<std::uint8_t>(src));
+  return dest;
+}
+
+
+template<typename Char>
+Char *uint32_to_be(std::uint32_t src, Char *dest) {
+  static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
+  dest[0] = static_cast<Char>(static_cast<std::uint8_t>(src >> 24));
+  dest[1] = static_cast<Char>(static_cast<std::uint8_t>(src >> 16));
+  dest[2] = static_cast<Char>(static_cast<std::uint8_t>(src >> 8));
+  dest[3] = static_cast<Char>(static_cast<std::uint8_t>(src));
+  return dest;
+}
+
 
 class Hsx {
 /*
@@ -120,11 +162,11 @@ public:
   /*
     Header
   */
-  const uint32_t magic_number    = MAGIC_BIG;     // Big endian
+  const uint32_t magic_number    = MAGIC_SMALL;     // Big endian
   const uint32_t version         = HSX_VERSION;   // HSX version number
   const uint32_t header_length   = HEADER_LENGTH;
   uint32_t number_of_files       = 0;             // FLEN
-  uint32_t file_table_offset     = 0x00000030;    // FOFF
+  uint32_t file_table_offset     = 0;    // FOFF
   uint32_t number_of_buckets     = 0;             // HLEN
   uint32_t hash_table_offset     = 0;             // HOFF
   uint32_t number_of_sequences   = 0;             // SLEN
@@ -174,6 +216,8 @@ public:
     number_of_sequences(num_of_seqs),
     file_information_records(file_info_records)
   {
+
+    std::cout << number_of_files << std::endl;
 
     // ----------------------------------------------
     //     Header
@@ -302,21 +346,23 @@ public:
     // f.write((char*)this, sizeof(*this));
 
     // Write header
-    f.write((char*)&magic_number, sizeof(magic_number));
-    f.write((char*)&version, sizeof(version));
-    f.write((char*)&header_length, sizeof(header_length));
-    f.write((char*)&number_of_files, sizeof(number_of_files));
-    f.write((char*)&file_table_offset, sizeof(file_table_offset));
-    f.write((char*)&number_of_buckets, sizeof(number_of_buckets));
-    f.write((char*)&hash_table_offset, sizeof(hash_table_offset));
-    f.write((char*)&number_of_sequences, sizeof(number_of_sequences));
-    f.write((char*)&sequence_table_offset, sizeof(sequence_table_offset));
+    f.write(uint32_to_le(magic_number, (char*)&magic_number), sizeof(magic_number));
+    f.write(uint32_to_le(version, (char*)&version), sizeof(version));
+    f.write(uint32_to_le(header_length, (char*)&header_length),     sizeof(header_length));
+
+    // why does this have to be be?
+    f.write(uint32_to_be(number_of_files, (char*)&number_of_files), sizeof(number_of_files));
+    f.write(uint32_to_be(file_table_offset, (char*)&file_table_offset), sizeof(file_table_offset));
+    f.write(uint32_to_be(number_of_buckets, (char*)&number_of_buckets), sizeof(number_of_buckets));
+    f.write(uint32_to_be(hash_table_offset, (char*)&hash_table_offset), sizeof(hash_table_offset));
+    f.write(uint32_to_be(number_of_sequences, (char*)&number_of_sequences), sizeof(number_of_sequences));
+    f.write(uint32_to_be(sequence_table_offset, (char*)&sequence_table_offset), sizeof(sequence_table_offset));
 
     f.write((char*)&header_padding, sizeof(header_padding));
 
     // -------
     for (auto &i : file_table) {
-      f.write((char*)&i, sizeof(i));
+      f.write(uint32_to_be(i, (char*)&i), sizeof(i));
     }
     f.write((char*)&file_table_padding, sizeof(file_table_padding));
 
@@ -328,16 +374,17 @@ public:
 
     // --- hash table ---
     for (auto &i : hash_table) {
-      f.write((char*)&i, sizeof(i));
+      f.write(uint32_to_be(i, (char*)&i), sizeof(i));
     }
     f.write((char*)&hash_table_padding, sizeof(hash_table_padding));
 
     // --- sequence index -----
     for (auto &i : sequence_index_array) {
 
-      f.write((char*)&i.length,   sizeof(i.length));
-      f.write((char*)&i.file_num, sizeof(i.file_num));
-      f.write((char*)&i.offset,   sizeof(i.offset));
+      f.write(uint64_5_to_be(i.length, (char*)&i.length), sizeof(5));
+      f.write((char*)&i.file_num, sizeof(1));
+      f.write(uint64_6_to_be(i.offset, (char*)&i.offset), sizeof(6));
+
       f.write(i.name.data(),      i.name.size());
     }
 
