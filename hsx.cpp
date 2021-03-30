@@ -18,8 +18,8 @@
 
 #define MAGIC_BIG 0xD2527095
 #define MAGIC_SMALL 0x957052D2
-#define HSX_VERSION 0x00010000
-#define HEADER_LENGTH 0x1C000000
+#define HSX_VERSION 0x00000100
+#define HEADER_LENGTH 0x0000001C
 
 #define MAX_FILES 255
 #define MAX_SEQUENCE 1000000
@@ -71,6 +71,17 @@ Char *uint64_5_to_be(std::uint64_t src, Char *dest) {
   //dest[7] = static_cast<Char>(static_cast<std::uint8_t>(src));
   return dest;
 }
+
+template<typename Char>
+Char *uint32_to_le(std::uint32_t src, Char *dest) {
+  static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
+  dest[3] = static_cast<Char>(static_cast<std::uint8_t>(src >> 24));
+  dest[2] = static_cast<Char>(static_cast<std::uint8_t>(src >> 16));
+  dest[1] = static_cast<Char>(static_cast<std::uint8_t>(src >> 8));
+  dest[0] = static_cast<Char>(static_cast<std::uint8_t>(src));
+  return dest;
+}
+
 
 
 template<typename Char>
@@ -162,7 +173,7 @@ public:
   /*
     Header
   */
-  const uint32_t magic_number    = MAGIC_SMALL;     // Big endian
+  const uint32_t magic_number    = MAGIC_BIG;     // Big endian
   const uint32_t version         = HSX_VERSION;   // HSX version number
   const uint32_t header_length   = HEADER_LENGTH;
   uint32_t number_of_files       = 0;             // FLEN
@@ -342,27 +353,28 @@ public:
   }
 
   void write_file(std::string output_filename) {
+    char buffer[8];
     std::ofstream f(output_filename, std::ios::binary | std::ios::out);
     // f.write((char*)this, sizeof(*this));
 
     // Write header
-    f.write(uint32_to_le(magic_number, (char*)&magic_number), sizeof(magic_number));
-    f.write(uint32_to_le(version, (char*)&version), sizeof(version));
-    f.write(uint32_to_le(header_length, (char*)&header_length),     sizeof(header_length));
+    f.write(uint32_to_be(magic_number, buffer), sizeof(magic_number));
+    f.write(uint32_to_be(version, buffer), sizeof(version));
+    f.write(uint32_to_be(header_length, buffer),     sizeof(header_length));
 
     // why does this have to be be?
-    f.write(uint32_to_be(number_of_files, (char*)&number_of_files), sizeof(number_of_files));
-    f.write(uint32_to_be(file_table_offset, (char*)&file_table_offset), sizeof(file_table_offset));
-    f.write(uint32_to_be(number_of_buckets, (char*)&number_of_buckets), sizeof(number_of_buckets));
-    f.write(uint32_to_be(hash_table_offset, (char*)&hash_table_offset), sizeof(hash_table_offset));
-    f.write(uint32_to_be(number_of_sequences, (char*)&number_of_sequences), sizeof(number_of_sequences));
-    f.write(uint32_to_be(sequence_table_offset, (char*)&sequence_table_offset), sizeof(sequence_table_offset));
+    f.write(uint32_to_be(number_of_files, buffer), sizeof(number_of_files));
+    f.write(uint32_to_be(file_table_offset, buffer), sizeof(file_table_offset));
+    f.write(uint32_to_be(number_of_buckets, buffer), sizeof(number_of_buckets));
+    f.write(uint32_to_be(hash_table_offset, buffer), sizeof(hash_table_offset));
+    f.write(uint32_to_be(number_of_sequences, buffer), sizeof(number_of_sequences));
+    f.write(uint32_to_be(sequence_table_offset, buffer), sizeof(sequence_table_offset));
 
     f.write((char*)&header_padding, sizeof(header_padding));
 
     // -------
     for (auto &i : file_table) {
-      f.write(uint32_to_be(i, (char*)&i), sizeof(i));
+      f.write(uint32_to_be(i, buffer), sizeof(i));
     }
     f.write((char*)&file_table_padding, sizeof(file_table_padding));
 
@@ -374,16 +386,16 @@ public:
 
     // --- hash table ---
     for (auto &i : hash_table) {
-      f.write(uint32_to_be(i, (char*)&i), sizeof(i));
+      f.write(uint32_to_be(i, buffer), sizeof(i));
     }
     f.write((char*)&hash_table_padding, sizeof(hash_table_padding));
 
     // --- sequence index -----
     for (auto &i : sequence_index_array) {
 
-      f.write(uint64_5_to_be(i.length, (char*)&i.length), sizeof(5));
+      f.write(uint64_5_to_be(i.length, buffer), sizeof(5));
       f.write((char*)&i.file_num, sizeof(1));
-      f.write(uint64_6_to_be(i.offset, (char*)&i.offset), sizeof(6));
+      f.write(uint64_6_to_be(i.offset, buffer), sizeof(6));
 
       f.write(i.name.data(),      i.name.size());
     }
