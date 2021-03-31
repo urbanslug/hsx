@@ -16,6 +16,9 @@
 
 #include <filesystem> // TODO: remove C++ 17 features
 
+using std::endl;
+using std::cout;
+
 #define MAGIC_BIG 0xD2527095
 #define MAGIC_SMALL 0x957052D2
 #define HSX_VERSION 0x00000100
@@ -601,14 +604,7 @@ bool sorter (Seq i, Seq j) {
   }
 }
 
-
-int main() {
-  std::string filename;
-  std::vector<std::string> filenames;
-
-  while (std::cin >> filename) {
-    filenames.push_back(filename);
-  }
+int generate_hsx(std::vector<std::string>& filenames) {
 
   // Check for max files
   int file_count = filenames.size();
@@ -691,5 +687,20 @@ int main() {
   obj.write_file("/home/sluggie/src/bio/hsx/out.hsx");
   //obj.read_file("/home/sluggie/src/bio/hsx/out.hsx");
 
+  return 0;
+}
+
+
+int main(int argc, char *argv[]) {
+  std::vector<std::string> filenames;
+
+  for (int i = 1; i < argc; i++) {
+    std::string f(argv[i]);
+
+    // TODO: check that filenames end in .fasta or .fa
+    filenames.push_back(f);
+  }
+
+  generate_hsx(filenames);
   return 0;
 }
