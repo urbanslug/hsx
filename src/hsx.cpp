@@ -20,13 +20,12 @@ using std::endl;
 using std::cout;
 
 #define MAGIC_BIG 0xD2527095
-#define MAGIC_SMALL 0x957052D2
+#define MAGIC_LITTLE 0x957052D2
 #define HSX_VERSION 0x00000100
 #define HEADER_LENGTH 0x0000001C
 
 #define MAX_FILES 255
-#define MAX_SEQUENCE 1000000
-#define MAX_HEADER 255
+
 
 
 // Structs and classes
@@ -40,12 +39,43 @@ struct Seq {
 };
 
 struct Short_Seq {
-  uint64_t    length;
-  uint8_t    file_num;
-  uint64_t    offset;
+  uint64_t length;
+  uint8_t file_num;
+  uint64_t offset;
   std::string name;
 };
 
+
+// Endianness switching templates from https://github.com/alipha/cpp/blob/master/endian/endian.hpp
+
+template<typename Char>
+Char *uint64_5_to_le(std::uint64_t src, Char *dest) {
+  static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
+  //dest[7] = static_cast<Char>(static_cast<std::uint8_t>(src >> 56));
+  //dest[6] = static_cast<Char>(static_cast<std::uint8_t>(src >> 48));
+  //dest[5] = static_cast<Char>(static_cast<std::uint8_t>(src >> 40));
+  dest[4] = static_cast<Char>(static_cast<std::uint8_t>(src >> 32));
+  dest[3] = static_cast<Char>(static_cast<std::uint8_t>(src >> 24));
+  dest[2] = static_cast<Char>(static_cast<std::uint8_t>(src >> 16));
+  dest[1] = static_cast<Char>(static_cast<std::uint8_t>(src >> 8));
+  dest[0] = static_cast<Char>(static_cast<std::uint8_t>(src));
+  return dest;
+}
+
+
+template<typename Char>
+Char *uint64_6_to_le(std::uint64_t src, Char *dest) {
+  static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
+  // dest[7] = static_cast<Char>(static_cast<std::uint8_t>(src >> 56));
+  // dest[6] = static_cast<Char>(static_cast<std::uint8_t>(src >> 48));
+  dest[5] = static_cast<Char>(static_cast<std::uint8_t>(src >> 40));
+  dest[4] = static_cast<Char>(static_cast<std::uint8_t>(src >> 32));
+  dest[3] = static_cast<Char>(static_cast<std::uint8_t>(src >> 24));
+  dest[2] = static_cast<Char>(static_cast<std::uint8_t>(src >> 16));
+  dest[1] = static_cast<Char>(static_cast<std::uint8_t>(src >> 8));
+  dest[0] = static_cast<Char>(static_cast<std::uint8_t>(src));
+  return dest;
+}
 
 template<typename Char>
 Char *uint64_6_to_be(std::uint64_t src, Char *dest) {
@@ -85,8 +115,6 @@ Char *uint32_to_le(std::uint32_t src, Char *dest) {
   return dest;
 }
 
-
-
 template<typename Char>
 Char *uint32_to_be(std::uint32_t src, Char *dest) {
   static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
@@ -97,6 +125,28 @@ Char *uint32_to_be(std::uint32_t src, Char *dest) {
   return dest;
 }
 
+template<typename Char>
+std::uint32_t be_to_uint32(const Char *src) {
+  static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
+  return static_cast<std::uint32_t>(
+    static_cast<std::uint32_t>(static_cast<std::uint8_t>(src[0])) << 24
+    | static_cast<std::uint32_t>(static_cast<std::uint8_t>(src[1])) << 16
+    | static_cast<std::uint32_t>(static_cast<std::uint8_t>(src[2])) << 8
+    | static_cast<std::uint32_t>(static_cast<std::uint8_t>(src[3]))
+    );
+}
+
+template<typename Char>
+std::uint32_t le_to_uint32(const Char *src) {
+  static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
+  return static_cast<std::uint32_t>(
+    static_cast<std::uint32_t>(static_cast<std::uint8_t>(src[3])) << 24
+    | static_cast<std::uint32_t>(static_cast<std::uint8_t>(src[2])) << 16
+    | static_cast<std::uint32_t>(static_cast<std::uint8_t>(src[1])) << 8
+    | static_cast<std::uint32_t>(static_cast<std::uint8_t>(src[0]))
+  );
+}
+
 
 class Hsx {
 /*
@@ -104,71 +154,71 @@ class Hsx {
 -------------------------------------------------------------------
 
 offset 0x00: D2 52 70 95        big endian magic number
-																.. (95 70 52 D2 => little endian)
+                                .. (95 70 52 D2 => little endian)
 offset 0x04: 00 00 01 xx        version 1.0 (see note 1)
 offset 0x08: 00 00 00 1C        header length (in bytes, including this
-									 							.. field)
+                                .. field)
 offset 0x0C: xx xx xx xx        FN, number of files (see note 2)
 offset 0x10: xx xx xx xx        FO, offset to file table
 offset 0x14: xx xx xx xx        HN, number of hash buckets (see notes 3 and 4)
 offset 0x18: xx xx xx xx        HO, offset to hash table
 offset 0x1C: xx xx xx xx        SN, number of sequences
 offset 0x20: xx xx xx xx        SO, offset to sequence index table (see
-								 								.. note 5)
+                                .. note 5)
 
 offset FO:   xx xx xx xx        FIO0, offset to file info for file 0
-			 			  ...               (FN-1 more entries, at 4 bytes per)
+              ...               (FN-1 more entries, at 4 bytes per)
 
 offset FIOn: LL xx ..           type of file (ascii "fa", "2bit", etc., see
                                 note 6)
-						 LL xx ..           name of file (see note 7)
-			 			  ...               (FN-1 more entries, variable length)
+             LL xx ..           name of file (see note 7)
+              ...               (FN-1 more entries, variable length)
 
 offset HO:   xx xx xx xx xx     SIOn, offset into sequence index table (see
-								 								.. notes 8, 9 and 10)
-		 	 			  ...               (HN-1 more entries, at 5 bytes per)
-				 	 	 xx xx xx xx xx     offset past end of sequence index table
+                                .. notes 8, 9 and 10)
+              ...               (HN-1 more entries, at 5 bytes per)
+             xx xx xx xx xx     offset past end of sequence index table
 
 offset SO:   xx xx xx xx xx     length of the sequence (see note 11)
-			 xx                 file number (index into file table)
-			 xx xx xx xx xx xx  offset to the sequence data (see note 12)
-			 LL xx ..           name of sequence (see note 13)
-			  ...               (SN-1 more entries, variable length)
+       xx                 file number (index into file table)
+       xx xx xx xx xx xx  offset to the sequence data (see note 12)
+       LL xx ..           name of sequence (see note 13)
+        ...               (SN-1 more entries, variable length)
 
 Notes:
 
-	(1)  The least significant byte of the version is the "sub version".
-	     For version 1, this is 00 (secondary hashes are not in use) or 01
-	     (secondary hashes are in use).
-	(2)  The number of files is limited to 255.
-	(3)  It is assumed that the number of buckets is set so that the average
-	     number of sequences per bucket (SN/HN) is reasonably small (e.g. 10).
-	(4)  The hash table actually includes HN+1 buckets.  The extra bucket has
-	     size zero and gives the offset to just past the end of the sequence
-	     index table.
-	(5)  Entries in the sequence index table are necessarily stored in hash
-	     order.  Entries with the same hash are stored in alphabetical order;
-	     actually, in lexicographic order over the bytes of their names.
-	(6)  Strings are stored as a length byte followed by ascii text.
-	(7)  If a file info record contains an empty name, the name of the file is
-	     the same as the index file itself, with the file type used as the
-	     extension (e.g. "reads.hsx" becomes "reads.fa").  This allows files to
-	     be renamed without rebuilding the index.
-	(8)  SIOn is the file offset for the nth entry in the sequence index table.
-	     When this is in a hash table entry, it is the index for the first
-	     sequence in that hash's bucket.
-	(9)  The most significant bit in a bucket's SIOn value is used to indicate
-	     whether the bucket is empty or not.  If a bucket is empty, this bit is
-	     set (1), otherwise it is clear.
-	(10) The end of a bucket can be determined from the SIOn entry for the
-	     start of the next bucket.
-	(11) A sequence may be empty, so zero is a legitimate value for the
-	     sequence length.
-	(12) The offset to the sequence data is an offset into the sequence file.
-	     For fasta it can point to the ">" at the start of the sequence's
-	     header, or directly to the sequence data.
-	(13) When secondary hashes are in use, the sequence name (including the
-	     terminating zero) is replaced by the four-byte secondary hash.
+  (1)  The least significant byte of the version is the "sub version".
+       For version 1, this is 00 (secondary hashes are not in use) or 01
+       (secondary hashes are in use).
+  (2)  The number of files is limited to 255.
+  (3)  It is assumed that the number of buckets is set so that the average
+       number of sequences per bucket (SN/HN) is reasonably small (e.g. 10).
+  (4)  The hash table actually includes HN+1 buckets.  The extra bucket has
+       size zero and gives the offset to just past the end of the sequence
+       index table.
+  (5)  Entries in the sequence index table are necessarily stored in hash
+       order.  Entries with the same hash are stored in alphabetical order;
+       actually, in lexicographic order over the bytes of their names.
+  (6)  Strings are stored as a length byte followed by ascii text.
+  (7)  If a file info record contains an empty name, the name of the file is
+       the same as the index file itself, with the file type used as the
+       extension (e.g. "reads.hsx" becomes "reads.fa").  This allows files to
+       be renamed without rebuilding the index.
+  (8)  SIOn is the file offset for the nth entry in the sequence index table.
+       When this is in a hash table entry, it is the index for the first
+       sequence in that hash's bucket.
+  (9)  The most significant bit in a bucket's SIOn value is used to indicate
+       whether the bucket is empty or not.  If a bucket is empty, this bit is
+       set (1), otherwise it is clear.
+  (10) The end of a bucket can be determined from the SIOn entry for the
+       start of the next bucket.
+  (11) A sequence may be empty, so zero is a legitimate value for the
+       sequence length.
+  (12) The offset to the sequence data is an offset into the sequence file.
+       For fasta it can point to the ">" at the start of the sequence's
+       header, or directly to the sequence data.
+  (13) When secondary hashes are in use, the sequence name (including the
+       terminating zero) is replaced by the four-byte secondary hash.
 
  */
 
@@ -176,24 +226,25 @@ public:
   /*
     Header
   */
-  const uint32_t magic_number    = MAGIC_BIG;     // Big endian
-  const uint32_t version         = HSX_VERSION;   // HSX version number
-  const uint32_t header_length   = HEADER_LENGTH;
+  uint32_t magic_number    = MAGIC_LITTLE;     // Big endian
+  uint32_t version         = HSX_VERSION;   // HSX version number
+
+  uint32_t header_length   = HEADER_LENGTH;
   uint32_t number_of_files       = 0;             // FLEN
-  uint32_t file_table_offset     = 0;    // FOFF
+  uint32_t file_table_offset     = 0;             // FOFF
   uint32_t number_of_buckets     = 0;             // HLEN
   uint32_t hash_table_offset     = 0;             // HOFF
   uint32_t number_of_sequences   = 0;             // SLEN
   uint32_t sequence_table_offset = 0;             // SOFF
 
-  uint32_t header_padding[4]     = {0};           // Padding
+  std::vector<uint8_t> header_padding;            // Padding
 
   /*
     FINFO File table
     It holds offsets into the FTYPE Table
    */
   std::vector<uint32_t> file_table;               // FINFO_0 .. number of files
-  uint32_t file_table_padding = 0;                // Padding
+  std::vector<uint8_t> file_table_padding;        // Padding
 
   /*
     FTYPE & FNAME file information records
@@ -201,7 +252,7 @@ public:
     from 0 .. number of files
    */
   std::vector<std::string> file_information_records;
-  uint32_t file_information_records_padding = 0;                      // Padding
+  std::vector<uint8_t> file_information_records_padding;     // Padding
 
   /*
     SOFF Hash table/sequence offsets
@@ -209,8 +260,8 @@ public:
     Buckets hold offsets from the file start to the sequence index array
     The hash table provides direct access to the sequence index array
    */
-  std::vector<uint32_t> hash_table;
-  uint32_t hash_table_padding = 0;
+  std::vector<uint64_t> hash_table;                   // This is HOFF
+  std::vector<uint8_t> hash_table_padding;     // Padding
 
   /*
     IXLEN  Length (in nucleotides) of the sequence
@@ -220,8 +271,14 @@ public:
 
     Sequence index
    */
-  std::vector<Short_Seq> sequence_index_array;         // SOFF table
-  uint32_t soff_padding = 0;                      // Padding
+  std::vector<Short_Seq> sequence_index_array;               // SOFF table
+  uint32_t soff_padding = 0;                                 // Padding
+
+  uint32_t pad_for_16(uint32_t n) {
+    return ((16 - (n % 16)) % 16);
+  }
+
+  Hsx() {}
 
   Hsx(uint32_t num_of_files, uint32_t num_of_seqs, uint32_t num_buckets,
       std::vector<std::string> file_info_records, std::vector<Seq> index) :
@@ -230,8 +287,6 @@ public:
     number_of_sequences(num_of_seqs),
     file_information_records(file_info_records)
   {
-
-    std::cout << number_of_files << std::endl;
 
     // ----------------------------------------------
     //     Header
@@ -247,10 +302,16 @@ public:
 
     //std::cout << header_length << "\n";
 
-    uint32_t header_end = th + sizeof(header_padding);
+    uint32_t header_padding_bytes = pad_for_16(8+header_length);
+    for (uint32_t i = 0; i < header_padding_bytes; i++){
+      header_padding.push_back(0);
+    }
+    uint32_t header_padding_size = header_padding.size() * sizeof(char);
 
-    // TODO: remove
-    std::cout << "header end " << header_end << std::endl; // => 52
+    uint32_t header_end = th + header_padding_size;
+
+    // TODO: make debug
+    printf("header end \t %#010x\n", header_end);
 
     file_table_offset = header_end; // set FOFF
 
@@ -260,7 +321,15 @@ public:
 
     file_table.reserve(number_of_files);
     uint32_t file_table_size = sizeof(uint32_t)*number_of_files;
-    uint32_t file_table_end = file_table_size + sizeof(file_table_padding) + header_end;
+
+    uint32_t file_table_length = number_of_files * 4;
+    uint32_t file_table_padding_bytes = pad_for_16(file_table_length);
+    for (uint32_t i = 0; i < file_table_padding_bytes; i++){
+      file_table_padding.push_back(0);
+    }
+    uint32_t file_table_padding_size = file_table_padding.size() * sizeof(char);
+
+    uint32_t file_table_end = file_table_size + file_table_padding_size + header_end;
 
     // populate the file table (FINFO)
     uint32_t info_record_offsets = file_table_end;
@@ -271,7 +340,7 @@ public:
       info_record_offsets += file_information_records[i].size() + file_information_records[i+inc].size();
     }
 
-    std::cout << "file table end " << file_table_end << std::endl;
+    printf("file table end \t %#010x\n", file_table_end);
 
     // ----------------------------------------------
     //     FYPE and FNAME
@@ -280,34 +349,59 @@ public:
     // the length of the data held by information records
     // each char is a byte
     int total_string_length = 0;
+    int fileInfoLength = 0;
     for (auto &s: file_information_records) {
       total_string_length += s.size();
+      fileInfoLength += s.size()+1;
     }
 
-    size_t info_records_end = file_table_end + total_string_length + sizeof(file_information_records_padding);
+    uint32_t file_information_records_padding_bytes = pad_for_16(fileInfoLength);
+    for (uint32_t i = 0; i < file_information_records_padding_bytes; i++){
+      file_information_records_padding.push_back(0);
+    }
+    uint32_t file_information_records_padding_size = file_information_records_padding.size() * sizeof(char);
 
-    std::cout << "info records end " << info_records_end << std::endl;
+    // TODO: make this a debug statement
+    // printf("file info len \t %#010x file info pad  %#010x\n", fileInfoLength, file_information_records_padding_bytes);
+
+    uint32_t info_records_end = file_table_end + fileInfoLength + file_information_records_padding_size;
+
 
     // ----------------------------------------------
     //     SOFF
     // ----------------------------------------------
     hash_table_offset = info_records_end; // set HOFF
+    printf("hash table offset \t %#010x\n", hash_table_offset);
     hash_table.reserve(number_of_buckets+1);
 
+    int hashTableLength = (number_of_buckets+1) * 5;
+    uint32_t  hashTablePad = pad_for_16(hashTableLength);
+
+    for (uint32_t i = 0; i < hashTablePad; i++){
+      hash_table_padding.push_back(0);
+    }
+
+    uint32_t hash_table_padding_size = hash_table_padding.size() * sizeof(char);
+
+    // the number of elements in the hash table * size of each element
+    //uint32_t hash_table_length = (number_of_buckets+1)*sizeof(uint32_t);
+    // the hash table entries are 5 wide
+    uint32_t hash_table_length = (number_of_buckets+1)*5;
 
     // TODO: check that number_of_buckets == hash_table.size()
 
-    size_t hash_table_end = info_records_end
-      + (number_of_buckets+1)*sizeof(uint32_t) // the number of elements in the hash table * size of each element
-      + sizeof(hash_table_padding);
+    uint32_t hash_table_end = hash_table_offset
+      + hash_table_length
+      + hash_table_padding_size;
 
-    std::cout << "hash table end " << hash_table_end << std::endl;
+    //printf("hash table len \t %#010x hash table pad  %#010x\n", hash_table_length, hash_table_padding_size);
 
     // ----------------------------------------------
     //     IXLEN, IXFILE, IXOFF, & IXNAME
     // ----------------------------------------------
     sequence_table_offset = hash_table_end; // set SOFF
 
+    printf("sequence Table offset \t %#010x\n", sequence_table_offset);
     std::vector<std::pair<uint32_t, uint32_t>> member_sizes; // bucket and size
     uint32_t acc = 0;
     std::vector<Short_Seq> short_index;
@@ -348,59 +442,73 @@ public:
     // set the sentinel bucket
     hash_table.push_back(sequence_table_offset + acc);
 
+    /*
     // TODO: remove this debug print statement
     std::cout << "number of buckets " << number_of_buckets
               << " hash table size " << hash_table.size()
               << " sentinel " << sequence_table_offset + acc
               << std::endl;
+    */
   }
 
   void write_file(std::string output_filename) {
     char buffer[8];
     std::ofstream f(output_filename, std::ios::binary | std::ios::out);
-    // f.write((char*)this, sizeof(*this));
+
+
+    // TODO: Why do I have to write this magic number in big endian?
+    f.write(uint32_to_be(magic_number, buffer), sizeof(magic_number));
+    f.write(uint32_to_le(version, buffer), sizeof(version));
 
     // Write header
-    f.write(uint32_to_be(magic_number, buffer), sizeof(magic_number));
-    f.write(uint32_to_be(version, buffer), sizeof(version));
-    f.write(uint32_to_be(header_length, buffer),     sizeof(header_length));
+    f.write(uint32_to_le(header_length, buffer),     sizeof(header_length));
+    f.write(uint32_to_le(number_of_files, buffer), sizeof(number_of_files));
+    f.write(uint32_to_le(file_table_offset, buffer), sizeof(file_table_offset));
+    f.write(uint32_to_le(number_of_buckets, buffer), sizeof(number_of_buckets));
+    f.write(uint32_to_le(hash_table_offset, buffer), sizeof(hash_table_offset));
+    f.write(uint32_to_le(number_of_sequences, buffer), sizeof(number_of_sequences));
+    f.write(uint32_to_le(sequence_table_offset, buffer), sizeof(sequence_table_offset));
 
-    // why does this have to be be?
-    f.write(uint32_to_be(number_of_files, buffer), sizeof(number_of_files));
-    f.write(uint32_to_be(file_table_offset, buffer), sizeof(file_table_offset));
-    f.write(uint32_to_be(number_of_buckets, buffer), sizeof(number_of_buckets));
-    f.write(uint32_to_be(hash_table_offset, buffer), sizeof(hash_table_offset));
-    f.write(uint32_to_be(number_of_sequences, buffer), sizeof(number_of_sequences));
-    f.write(uint32_to_be(sequence_table_offset, buffer), sizeof(sequence_table_offset));
-
-    f.write((char*)&header_padding, sizeof(header_padding));
+    for (auto &p : header_padding)
+      f.write((char*)&p, sizeof(p));
 
     // -------
     for (auto &i : file_table) {
-      f.write(uint32_to_be(i, buffer), sizeof(i));
+      f.write(uint32_to_le(i, buffer), sizeof(i));
     }
-    f.write((char*)&file_table_padding, sizeof(file_table_padding));
+
+    for (auto &p : file_table_padding)
+      f.write((char*)&p, sizeof(p));
 
     // -------
     for (auto &k : file_information_records) {
+      // TODO: Why this +1 ?
+      char len = static_cast<char>(k.size());
+      f.write(&len, sizeof(len));
       f.write(k.data(), k.size());
     }
-    f.write((char*)&file_information_records_padding, sizeof(file_information_records_padding));
+
+    for (auto &p : file_information_records_padding)
+      f.write((char*)&p, sizeof(p));
 
     // --- hash table ---
     for (auto &i : hash_table) {
-      f.write(uint32_to_be(i, buffer), sizeof(i));
+      f.write(uint64_5_to_le(i, buffer), 5);
     }
-    f.write((char*)&hash_table_padding, sizeof(hash_table_padding));
+
+    for (auto &p : hash_table_padding)
+      f.write((char*)&p, sizeof(p));
 
     // --- sequence index -----
     for (auto &i : sequence_index_array) {
 
-      f.write(uint64_5_to_be(i.length, buffer), sizeof(5));
-      f.write((char*)&i.file_num, sizeof(1));
-      f.write(uint64_6_to_be(i.offset, buffer), sizeof(6));
+      f.write(uint64_5_to_le(i.length, buffer), 5);
+      f.write((char*)&i.file_num, sizeof(i.file_num));
+      f.write(uint64_6_to_le(i.offset, buffer), 6);
 
-      f.write(i.name.data(),      i.name.size());
+      char len = static_cast<char>(i.name.size());
+      f.write(&len, sizeof(len));
+      f.write(i.name.data(), i.name.size());
     }
 
     f.close();
@@ -408,33 +516,43 @@ public:
 
   void read_file(std::string input_filename) {
     std::ifstream f(input_filename, std::ios::binary | std::ios::in);
-    while (f.read((char*)this, sizeof(*this))) {
-      this->info();
-    }
+    char buffer[8];
+
+    f.read(buffer, sizeof(this->magic_number));
+    this->magic_number = be_to_uint32(buffer);
+
+    f.read(buffer, sizeof(version));
+    this->version = le_to_uint32(buffer);
+
+    // Header
+    f.read((char*)&this->header_length, sizeof(this->header_length));
+    f.read((char*)&this->number_of_files, sizeof(this->number_of_files));
+    f.read((char*)&this->file_table_offset, sizeof(this->file_table_offset));
+    f.read((char*)&this->number_of_buckets, sizeof(this->number_of_buckets));
+    f.read((char*)&this->hash_table_offset, sizeof(this->hash_table_offset));
+    f.read((char*)&this->number_of_sequences, sizeof(this->number_of_sequences));
+    f.read((char*)&this->sequence_table_offset, sizeof(this->sequence_table_offset));
+
+    // f.read((char*)&this->header_padding, sizeof(this->header_padding));
+
     f.close();
   }
 
   void info() {
+    printf("magic number \t %#010x\n", magic_number);
+    printf("version \t %#010x\n", version);
+
     // Header
-    std::cout << "Number of files:\t"       << number_of_files
-              << "\nNumber of sequences:\t" << number_of_sequences
-              << std::endl;
-    std::cout << "-----------------------------------------\n";
-    // file information
-    std::cout << "File information records" << std::endl;
-    for (auto r : file_information_records) {
-      std::cout << r << std::endl;
-    }
-    std::cout << "-----------------------------------------\n";
+    printf("header length \t %#010x\n", header_length);
+    printf("number of files \t %#010x\n", number_of_files);
+    printf("file table offset \t %#010x\n", file_table_offset);
+    printf("number of buckets \t %#010x\n", number_of_buckets);
+    printf("hash table offset \t %#010x\n", hash_table_offset);
+    printf("number of sequences \t %#010x\n", number_of_sequences);
+    printf("sequence table offset \t %#010x\n", sequence_table_offset);
 
-    // Hash table
-
-    // Sequence index
-    for (auto s: sequence_index_array) {
-      std::cout << s.length   << "\t"
-                << s.file_num << "\t"
-                << s.offset   << "\t"
-                << s.name     << std::endl;
+    for (auto &i : header_padding) {
+      printf("header padding \t %#010x\n", i);
     }
   }
 };
@@ -605,8 +723,7 @@ bool sorter (Seq i, Seq j) {
 }
 
 int generate_hsx(std::vector<std::string>& filenames) {
-
-  // Check for max files
+  // Ensure that we don't have more than 255 files
   int file_count = filenames.size();
   if (file_count > MAX_FILES) {
     std::cerr << "Maximum number of files (255) exceeded" << std::endl;
@@ -682,10 +799,19 @@ int generate_hsx(std::vector<std::string>& filenames) {
   // sort index
   std::sort(index.begin(), index.end(), sorter);
 
-  Hsx obj(file_count, num_sequences, num_buckets, file_information_records, index);
+  // ----------------------------------------------------------
 
+  // TODO: remove these tests here
+
+  Hsx obj(file_count, num_sequences, num_buckets, file_information_records, index);
   obj.write_file("/home/sluggie/src/bio/hsx/out.hsx");
-  //obj.read_file("/home/sluggie/src/bio/hsx/out.hsx");
+
+  cout << "\n-----------------------------------------\n";
+
+  Hsx obj_read;
+  obj_read.read_file("/home/sluggie/src/bio/hsx/out.hsx");
+  obj_read.info();
+
 
   return 0;
 }
