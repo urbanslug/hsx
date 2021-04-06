@@ -14,18 +14,13 @@
 #include <algorithm>
 #include <set>
 
-#include <filesystem> // TODO: remove C++ 17 features
-
-using std::endl;
-using std::cout;
-
 #define MAGIC_BIG 0xD2527095
 #define MAGIC_LITTLE 0x957052D2
 #define HSX_VERSION 0x00000100
 #define HEADER_LENGTH 0x0000001C
 #define MAX_FILES 255
 
-
+bool DEBUG = false;
 
 
 // Endianness switching templates from https://github.com/alipha/cpp/blob/master/endian/endian.hpp
@@ -306,8 +301,6 @@ public:
       + sizeof (hash_table_offset) + sizeof(number_of_sequences)
       + sizeof(sequence_table_offset);
 
-    //std::cout << header_length << "\n";
-
     uint32_t header_padding_bytes = pad_for_16(8+header_length);
     for (uint32_t i = 0; i < header_padding_bytes; i++){
       header_padding.push_back(0);
@@ -316,8 +309,8 @@ public:
 
     uint32_t header_end = th + header_padding_size;
 
-    // TODO: make debug
-    printf("header end \t %#010x\n", header_end);
+    if (DEBUG)
+      printf("header end \t %#010x\n", header_end);
 
     file_table_offset = header_end; // set FOFF
 
@@ -346,7 +339,8 @@ public:
       info_record_offsets += file_information_records[i].size() + file_information_records[i+inc].size();
     }
 
-    printf("file table end \t %#010x\n", file_table_end);
+    if (DEBUG)
+      printf("file table end \t %#010x\n", file_table_end);
 
     // ----------------------------------------------
     //     FYPE and FNAME
@@ -367,8 +361,9 @@ public:
     }
     uint32_t file_information_records_padding_size = file_information_records_padding.size() * sizeof(char);
 
-    // TODO: make this a debug statement
-    // printf("file info len \t %#010x file info pad  %#010x\n", fileInfoLength, file_information_records_padding_bytes);
+    if (DEBUG) {
+        printf("file info len \t %#010x file info pad  %#010x\n", fileInfoLength, file_information_records_padding_bytes);
+      }
 
     uint32_t info_records_end = file_table_end + fileInfoLength + file_information_records_padding_size;
 
@@ -377,7 +372,10 @@ public:
     //     SOFF
     // ----------------------------------------------
     hash_table_offset = info_records_end; // set HOFF
-    printf("hash table offset \t %#010x\n", hash_table_offset);
+    if (DEBUG) {
+      printf("hash table offset \t %#010x\n", hash_table_offset);
+    }
+
     hash_table.reserve(number_of_buckets+1);
 
     int hashTableLength = (number_of_buckets+1) * 5;
@@ -400,14 +398,19 @@ public:
       + hash_table_length
       + hash_table_padding_size;
 
-    //printf("hash table len \t %#010x hash table pad  %#010x\n", hash_table_length, hash_table_padding_size);
+    if (DEBUG) {
+      printf("hash table len \t %#010x hash table pad  %#010x\n", hash_table_length, hash_table_padding_size);
+    }
 
     // ----------------------------------------------
     //     IXLEN, IXFILE, IXOFF, & IXNAME
     // ----------------------------------------------
     sequence_table_offset = hash_table_end; // set SOFF
 
-    printf("sequence Table offset \t %#010x\n", sequence_table_offset);
+    if (DEBUG) {
+      printf("sequence Table offset \t %#010x\n", sequence_table_offset);
+    }
+
     std::vector<std::pair<uint32_t, uint32_t>> member_sizes; // bucket and size
     uint32_t acc = 0;
     std::vector<Short_Seq> short_index;
@@ -841,19 +844,16 @@ int generate_hsx(std::vector<std::string>& filenames, std::string hsx_file) {
   // sort index
   std::sort(index.begin(), index.end(), sorter);
 
-  // ----------------------------------------------------------
-
-  // TODO: remove these tests here
-
+  // Create a hsx object and write a hsx file
   Hsx obj(file_count, num_sequences, num_buckets, file_information_records, index);
-
-  cout << "\n-----------------------Writing------------------\n";
   obj.write_file(hsx_file);
 
-  cout << "\n-----------------------Reading------------------\n";
+
+  /*
   Hsx obj_read;
   obj_read.read_file(hsx_file);
   obj_read.info();
+  */
 
 
   return 0;
