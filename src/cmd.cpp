@@ -15,7 +15,7 @@ int main(int argc, char** argv) {
     filenames.push_back(f);
   }
 
-  std::string hsx_file = "/home/sluggie/src/bio/hsx/out.hsx";
+  std::string hsx_file = "/dev/stdout";
 
   generate_hsx(filenames, hsx_file);
   return 0;
