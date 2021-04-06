@@ -310,7 +310,7 @@ public:
     uint32_t header_end = th + header_padding_size;
 
     if (DEBUG)
-      printf("header end \t %#010x\n", header_end);
+      fprintf(stderr, "header end \t %#010x\n", header_end);
 
     file_table_offset = header_end; // set FOFF
 
@@ -340,7 +340,7 @@ public:
     }
 
     if (DEBUG)
-      printf("file table end \t %#010x\n", file_table_end);
+      fprintf(stderr, "file table end \t %#010x\n", file_table_end);
 
     // ----------------------------------------------
     //     FYPE and FNAME
@@ -362,7 +362,7 @@ public:
     uint32_t file_information_records_padding_size = file_information_records_padding.size() * sizeof(char);
 
     if (DEBUG) {
-        printf("file info len \t %#010x file info pad  %#010x\n", fileInfoLength, file_information_records_padding_bytes);
+        fprintf(stderr, "file info len \t %#010x file info pad  %#010x\n", fileInfoLength, file_information_records_padding_bytes);
       }
 
     uint32_t info_records_end = file_table_end + fileInfoLength + file_information_records_padding_size;
@@ -373,7 +373,7 @@ public:
     // ----------------------------------------------
     hash_table_offset = info_records_end; // set HOFF
     if (DEBUG) {
-      printf("hash table offset \t %#010x\n", hash_table_offset);
+      fprintf(stderr, "hash table offset \t %#010x\n", hash_table_offset);
     }
 
     hash_table.reserve(number_of_buckets+1);
@@ -399,7 +399,7 @@ public:
       + hash_table_padding_size;
 
     if (DEBUG) {
-      printf("hash table len \t %#010x hash table pad  %#010x\n", hash_table_length, hash_table_padding_size);
+      fprintf(stderr, "hash table len \t %#010x hash table pad  %#010x\n", hash_table_length, hash_table_padding_size);
     }
 
     // ----------------------------------------------
@@ -408,7 +408,7 @@ public:
     sequence_table_offset = hash_table_end; // set SOFF
 
     if (DEBUG) {
-      printf("sequence Table offset \t %#010x\n", sequence_table_offset);
+      fprintf(stderr, "sequence Table offset \t %#010x\n", sequence_table_offset);
     }
 
     std::vector<std::pair<uint32_t, uint32_t>> member_sizes; // bucket and size
@@ -450,14 +450,6 @@ public:
 
     // set the sentinel bucket
     hash_table.push_back(sequence_table_offset + acc);
-
-    /*
-    // TODO: remove this debug print statement
-    std::cout << "number of buckets " << number_of_buckets
-              << " hash table size " << hash_table.size()
-              << " sentinel " << sequence_table_offset + acc
-              << std::endl;
-    */
   }
 
   void write_file(std::string output_filename) {
@@ -491,7 +483,6 @@ public:
 
     // -------
     for (auto &k : file_information_records) {
-      // TODO: Why this +1 ?
       char len = static_cast<char>(k.size());
       f.write(&len, sizeof(len));
       f.write(k.data(), k.size());
@@ -542,26 +533,26 @@ public:
     f.read((char*)&this->number_of_sequences, sizeof(this->number_of_sequences));
     f.read((char*)&this->sequence_table_offset, sizeof(this->sequence_table_offset));
 
-    // f.read((char*)&this->header_padding, sizeof(this->header_padding));
+    // TODO: read the rest of the HSX file
 
     f.close();
   }
 
   void info() {
-    printf("magic number \t %#010x\n", magic_number);
-    printf("version \t %#010x\n", version);
+    fprintf(stderr, "magic number \t %#010x\n", magic_number);
+    fprintf(stderr, "version \t %#010x\n", version);
 
     // Header
-    printf("header length \t %#010x\n", header_length);
-    printf("number of files \t %#010x\n", number_of_files);
-    printf("file table offset \t %#010x\n", file_table_offset);
-    printf("number of buckets \t %#010x\n", number_of_buckets);
-    printf("hash table offset \t %#010x\n", hash_table_offset);
-    printf("number of sequences \t %#010x\n", number_of_sequences);
-    printf("sequence table offset \t %#010x\n", sequence_table_offset);
+    fprintf(stderr, "header length \t %#010x\n", header_length);
+    fprintf(stderr, "number of files \t %#010x\n", number_of_files);
+    fprintf(stderr, "file table offset \t %#010x\n", file_table_offset);
+    fprintf(stderr, "number of buckets \t %#010x\n", number_of_buckets);
+    fprintf(stderr, "hash table offset \t %#010x\n", hash_table_offset);
+    fprintf(stderr, "number of sequences \t %#010x\n", number_of_sequences);
+    fprintf(stderr, "sequence table offset \t %#010x\n", sequence_table_offset);
 
     for (auto &i : header_padding) {
-      printf("header padding \t %#010x\n", i);
+      fprintf(stderr, "header padding \t %#010x\n", i);
     }
   }
 };
@@ -636,15 +627,15 @@ public:
   }
 
   void print() {
-    std::cout << '>' << header << std::endl;
+    std::cerr << '>' << header << std::endl;
     for (int i = 0; i < sequence_length; i += 80 ) {
       for (int j = i; (j < i+80 && j < sequence_length) ; j++) {
-        std::cout << sequence[j];
+        std::cerr << sequence[j];
       }
-      std::cout << std::endl;
+      std::cerr << std::endl;
     }
 
-    std::cout << "Header length "     << header_length
+    std::cerr << "Header length "     << header_length
               << "\thash "            << short_hash
               << "\tsequence length " << sequence_length
               << "\theader offset "   << header_offset
