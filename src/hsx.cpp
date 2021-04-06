@@ -23,31 +23,12 @@ using std::cout;
 #define MAGIC_LITTLE 0x957052D2
 #define HSX_VERSION 0x00000100
 #define HEADER_LENGTH 0x0000001C
-
 #define MAX_FILES 255
 
 
 
-// Structs and classes
-// -------------------
-struct Seq {
-  uint32_t hash;
-  std::string name;
-  uint32_t length;
-  uint32_t file_num;
-  uint32_t offset;
-};
-
-struct Short_Seq {
-  uint64_t length;
-  uint8_t file_num;
-  uint64_t offset;
-  std::string name;
-};
-
 
 // Endianness switching templates from https://github.com/alipha/cpp/blob/master/endian/endian.hpp
-
 template<typename Char>
 Char *uint64_5_to_le(std::uint64_t src, Char *dest) {
   static_assert(sizeof(Char) == 1, "Char must be a byte-sized type");
@@ -61,7 +42,6 @@ Char *uint64_5_to_le(std::uint64_t src, Char *dest) {
   dest[0] = static_cast<Char>(static_cast<std::uint8_t>(src));
   return dest;
 }
-
 
 template<typename Char>
 Char *uint64_6_to_le(std::uint64_t src, Char *dest) {
@@ -147,6 +127,32 @@ std::uint32_t le_to_uint32(const Char *src) {
   );
 }
 
+
+
+/*
+  Structs and classes
+  -------------------
+*/
+struct Seq {
+  uint32_t    hash;
+  std::string name;
+  uint32_t    length;
+  uint32_t    file_num;
+  uint32_t    offset;
+};
+
+struct Short_Seq {
+  uint64_t    length;
+  uint8_t     file_num;
+  uint64_t    offset;
+  std::string name;
+};
+
+struct Path {
+  std::string directory;
+  std::string stub;
+  std::string extension;
+};
 
 class Hsx {
 /*
@@ -647,6 +653,11 @@ public:
 };
 
 /*
+  Helper functions
+  ----------------
+*/
+
+/*
  Parse a fasta file...
  */
 std::vector<Fasta> read_fasta_file(std::string fasta_file_path, size_t file_num) {
@@ -722,8 +733,39 @@ bool sorter (Seq i, Seq j) {
   }
 }
 
-int generate_hsx(std::vector<std::string>& filenames) {
-  // Ensure that we don't have more than 255 files
+std::string lowercase_string(std::string str) {
+  auto lowercase_char = [](unsigned char c){ return std::tolower(c); };
+  std::transform(str.begin(), str.end(), str.begin(), lowercase_char);
+  return str;
+}
+
+Path parse_path (std::string filename) {
+  std::string::size_type idx_ext, idx_base;
+  Path p;
+
+  idx_ext = filename.rfind('.');
+
+  if(idx_ext != std::string::npos) {
+      p.extension = filename.substr(idx_ext+1);
+  } else {
+    std::cerr << "Could not find the extension on file. HSX expects the extension as .fa or .fasta"
+              << filename << std::endl;
+    exit(EXIT_FAILURE);
+  }
+
+  idx_base = filename.rfind('/');
+  if(idx_base != std::string::npos) {
+    p.stub = filename.substr(idx_base+1, idx_ext-(idx_base+1));
+    p.directory = filename.substr(0, idx_base);
+  } else {
+    p.stub = filename.substr(0, idx_ext);
+  }
+
+  return p;
+}
+
+int generate_hsx(std::vector<std::string>& filenames, std::string hsx_file) {
+  // Check that we don't have more than 255 files
   int file_count = filenames.size();
   if (file_count > MAX_FILES) {
     std::cerr << "Maximum number of files (255) exceeded" << std::endl;
@@ -733,25 +775,25 @@ int generate_hsx(std::vector<std::string>& filenames) {
   // Generate the file information records
   std::set<std::string> seen_filenames;
   std::vector<std::string> file_information_records;
-  for (auto filename : filenames) {
+  for (auto &filename : filenames) {
 
     // Ensure there are no duplicate filenames
     if (seen_filenames.find(filename) != seen_filenames.end()) {
-      std::cerr << "Hsx does not support two files with the same filename but duplicate filename found "
+      std::cerr << "Hsx does not support duplicates, but duplicate found "
                 << filename << std::endl;
       exit(EXIT_FAILURE);
     }
     seen_filenames.insert(filename);
 
-    // TODO: make backwards compatible stop using std::filesystem
-    std::filesystem::path p (filename);
-    std::string dot_ext = p.extension();
-    std::string ext = dot_ext.substr(1, dot_ext.size());
-    std::string base_name = p.stem();
+    Path p = parse_path(filename);
+    std::string ext = p.extension;
+    std::string base_name = p.stub;
 
-    // TODO: check that extension is fasta or fa
-    if (false) {
-      std::cerr << "Hsx only support fasta or fa extensions" << std::endl;
+    // check that extension is fasta or fa
+    std::string lowercase_extension = lowercase_string(ext);
+    if (lowercase_extension != "fa" && lowercase_extension != "fasta") {
+      std::cerr << "Hsx only support fasta or fa extensions. Found "
+                << ext << " from " << filename << "." << std::endl;
       exit(EXIT_FAILURE);
     }
 
@@ -804,29 +846,15 @@ int generate_hsx(std::vector<std::string>& filenames) {
   // TODO: remove these tests here
 
   Hsx obj(file_count, num_sequences, num_buckets, file_information_records, index);
-  obj.write_file("/home/sluggie/src/bio/hsx/out.hsx");
 
-  cout << "\n-----------------------------------------\n";
+  cout << "\n-----------------------Writing------------------\n";
+  obj.write_file(hsx_file);
 
+  cout << "\n-----------------------Reading------------------\n";
   Hsx obj_read;
-  obj_read.read_file("/home/sluggie/src/bio/hsx/out.hsx");
+  obj_read.read_file(hsx_file);
   obj_read.info();
 
 
-  return 0;
-}
-
-
-int main(int argc, char *argv[]) {
-  std::vector<std::string> filenames;
-
-  for (int i = 1; i < argc; i++) {
-    std::string f(argv[i]);
-
-    // TODO: check that filenames end in .fasta or .fa
-    filenames.push_back(f);
-  }
-
-  generate_hsx(filenames);
   return 0;
 }
